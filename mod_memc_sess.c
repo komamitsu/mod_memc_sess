@@ -6,7 +6,7 @@
 **  DSO file and install it into Apache's modules directory 
 **  by running:
 **
-**    $ apxs -c -i mod_memc_sess.c
+**    $ apxs -c -i -l memcached mod_memc_sess.c
 **
 **  Then activate it in Apache's apache2.conf file for instance
 **  for the URL /memc_sess in as follows:
@@ -42,18 +42,22 @@
 #include "http_protocol.h"
 #include "http_log.h"
 #include "ap_config.h"
+#include "ap_regex.h"
+#include "apreq2/apreq_cookie.h"
 #include "libmemcached/memcached.h"
 
 #define ERR_MSG_HEAD "MemcSess: "
 #define ERR_MSG_NO_MEMCACHED_HOST (ERR_MSG_HEAD "Memcached host is empty ")
-#define ERR_MSG_NO_SESSION_KEY    (ERR_MSG_HEAD "Session key is empty ")
+#define ERR_MSG_NO_SESSION_KEY_NAME (ERR_MSG_HEAD "Session key name is empty ")
+#define ERR_MSG_NO_SESSION_KEY_PREFIX (ERR_MSG_HEAD "Session key prefix is empty ")
 #define ERR_MSG_NO_REDIRECT_URL   (ERR_MSG_HEAD "Redirect URL is empty ")
 
 #define ERRLOG(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL, __VA_ARGS__)
 
 typedef struct {
   const char *memcached_host;
-  const char *session_key;
+  const char *session_key_name;
+  const char *session_key_prefix;
   const char *redirect_url;
 } memc_sess_conf;
 
@@ -74,9 +78,14 @@ static const char *get_memcached_host(request_rec *r)
   return conf_from_req(r)->memcached_host;
 }
 
-static const char *get_session_key(request_rec *r)
+static const char *get_session_key_name(request_rec *r)
 {
-  return conf_from_req(r)->session_key;
+  return conf_from_req(r)->session_key_name;
+}
+
+static const char *get_session_key_prefix(request_rec *r)
+{
+  return conf_from_req(r)->session_key_prefix;
 }
 
 static const char *get_redirect_url(request_rec *r)
@@ -131,13 +140,43 @@ static int memc_get_session(const char *memcached_host,
   return 1;
 }
 
+static const char *get_session_key(request_rec *r, const char *key_name)
+{
+  apr_status_t st;
+  apr_table_t *cookie_jar;
+  const char *cookie_string;
+  const char *cookie_value;
+
+  cookie_string = apr_table_get(r->headers_in, "Cookie");
+  if (!cookie_string)
+    return NULL;
+
+  cookie_jar = apr_table_make(r->pool, 1);
+  st = apreq_parse_cookie_header(r->pool, cookie_jar, cookie_string);
+  if (st != APR_SUCCESS) {
+    char buf[512];
+    apreq_strerror(st, buf, sizeof(buf));
+    ERRLOG((ERR_MSG_HEAD "apreq_parse_cookie_header error. %s "), buf);
+    return NULL;
+  }
+
+  cookie_value = apr_table_get(cookie_jar, key_name);
+  if (!cookie_value)
+    return NULL;
+
+  return cookie_value;
+}
+
 /* The sample content handler */
 static int memc_sess_handler(request_rec *r)
 {
   int rc;
   const char *memcached_host = get_memcached_host(r);
-  const char *session_key = get_session_key(r);
+  const char *session_key_name = get_session_key_name(r);
+  const char *session_key_prefix = get_session_key_prefix(r);
   const char *redirect_url = get_redirect_url(r);
+  const char *session_key;
+  char session_key_buf[256];
   char buf[1024];
 
   if (strcmp(r->handler, "memc_sess")) {
@@ -149,8 +188,8 @@ static int memc_sess_handler(request_rec *r)
     return DECLINED;
   }
 
-  if (!session_key) {
-    ERRLOG(ERR_MSG_NO_SESSION_KEY);
+  if (!session_key_name) {
+    ERRLOG(ERR_MSG_NO_SESSION_KEY_NAME);
     return DECLINED;
   }
 
@@ -159,10 +198,23 @@ static int memc_sess_handler(request_rec *r)
     return DECLINED;
   }
 
-  rc = memc_get_session(memcached_host, session_key, sizeof(buf), buf);
+  if ((session_key = get_session_key(r, session_key_name)) &&
+      session_key_prefix) {
+ERRLOG("hoge 1");
+    snprintf(session_key_buf, sizeof(session_key_buf),
+             "%s%s", session_key_prefix, session_key);
+ERRLOG("hoge 2");
+    session_key = session_key_buf;
+ERRLOG("hoge 3");
+  }
 
-  if (rc)
+  if (session_key &&
+      (rc = memc_get_session(memcached_host, 
+                             session_key, sizeof(buf), buf))) {
+ERRLOG("hoge 4");
     ap_rprintf(r, "The sample page from mod_memc_sess.c [val:%s\n]", buf);
+ERRLOG("hoge 5");
+  }
   else {
     apr_table_set(r->headers_out, "Location", redirect_url);
     return HTTP_MOVED_TEMPORARILY;
@@ -185,23 +237,32 @@ static const char *cmd_memcached_host(cmd_parms *cmd, void *config,
                                       const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-
   if (!(conf->memcached_host = arg1)) {
-    return (const char*)apr_pstrcat(cmd->pool, ERR_MSG_NO_MEMCACHED_HOST, arg1, NULL);
+    return (const char*)apr_pstrcat(
+        cmd->pool, ERR_MSG_NO_MEMCACHED_HOST, arg1, NULL);
   }
-
   return NULL;
 }
 
-static const char *cmd_session_key(cmd_parms *cmd, void *config,
+static const char *cmd_session_key_name(cmd_parms *cmd, void *config,
                                    const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-
-  if (!(conf->session_key = arg1)) {
-    return (const char*)apr_pstrcat(cmd->pool, ERR_MSG_NO_SESSION_KEY, arg1, NULL);
+  if (!(conf->session_key_name = arg1)) {
+    return (const char*)apr_pstrcat(
+        cmd->pool, ERR_MSG_NO_SESSION_KEY_NAME, arg1, NULL);
   }
+  return NULL;
+}
 
+static const char *cmd_session_key_prefix(cmd_parms *cmd, void *config,
+                                   const char *arg1)
+{
+  memc_sess_conf *conf = conf_from_cmd(cmd);
+  if (!(conf->session_key_prefix = arg1)) {
+    return (const char*)apr_pstrcat(
+        cmd->pool, ERR_MSG_NO_SESSION_KEY_PREFIX, arg1, NULL);
+  }
   return NULL;
 }
 
@@ -209,11 +270,10 @@ static const char *cmd_redirect_url(cmd_parms *cmd, void *config,
                                    const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-
   if (!(conf->redirect_url = arg1)) {
-    return (const char*)apr_pstrcat(cmd->pool, ERR_MSG_NO_REDIRECT_URL, arg1, NULL);
+    return (const char*)apr_pstrcat(
+        cmd->pool, ERR_MSG_NO_REDIRECT_URL, arg1, NULL);
   }
-
   return NULL;
 }
 
@@ -221,8 +281,10 @@ static const command_rec memc_sess_cmds[] =
 {
   AP_INIT_TAKE1("MemcachedHost", cmd_memcached_host, NULL, ACCESS_CONF,
                 "specify host and port of a memcached"),
-  AP_INIT_TAKE1("SessionKey", cmd_session_key, NULL, ACCESS_CONF,
-                "specify a session key"),
+  AP_INIT_TAKE1("SessionKeyName", cmd_session_key_name, NULL, ACCESS_CONF,
+                "specify a session key name"),
+  AP_INIT_TAKE1("SessionKeyPrefix", cmd_session_key_prefix, NULL, ACCESS_CONF,
+                "specify a session key prefix"),
   AP_INIT_TAKE1("RedirectURL", cmd_redirect_url, NULL, ACCESS_CONF,
                 "specify a redirect url"),
   { NULL }
