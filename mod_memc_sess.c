@@ -179,41 +179,36 @@ static int memc_sess_handler(request_rec *r)
   char session_key_buf[256];
   char buf[1024];
 
-  if (strcmp(r->handler, "memc_sess")) {
-    return DECLINED;
-  }
+//  if (strcmp(r->handler, "memc_sess")) {
+//    return DECLINED;
+//  }
 
   if (!memcached_host) {
     ERRLOG(ERR_MSG_NO_MEMCACHED_HOST);
-    return DECLINED;
+    return HTTP_INTERNAL_SERVER_ERROR;
   }
 
   if (!session_key_name) {
     ERRLOG(ERR_MSG_NO_SESSION_KEY_NAME);
-    return DECLINED;
+    return HTTP_INTERNAL_SERVER_ERROR;
   }
 
   if (!redirect_url) {
     ERRLOG(ERR_MSG_NO_REDIRECT_URL);
-    return DECLINED;
+    return HTTP_INTERNAL_SERVER_ERROR;
   }
 
   if ((session_key = get_session_key(r, session_key_name)) &&
       session_key_prefix) {
-ERRLOG("hoge 1");
     snprintf(session_key_buf, sizeof(session_key_buf),
              "%s%s", session_key_prefix, session_key);
-ERRLOG("hoge 2");
     session_key = session_key_buf;
-ERRLOG("hoge 3");
   }
 
   if (session_key &&
       (rc = memc_get_session(memcached_host, 
                              session_key, sizeof(buf), buf))) {
-ERRLOG("hoge 4");
-    ap_rprintf(r, "The sample page from mod_memc_sess.c [val:%s\n]", buf);
-ERRLOG("hoge 5");
+    ;
   }
   else {
     apr_table_set(r->headers_out, "Location", redirect_url);
@@ -225,7 +220,7 @@ ERRLOG("hoge 5");
 
 static void register_hooks(apr_pool_t *p)
 {
-    ap_hook_handler(memc_sess_handler, NULL, NULL, APR_HOOK_MIDDLE);
+    ap_hook_access_checker(memc_sess_handler, NULL, NULL, APR_HOOK_MIDDLE);
 }
 
 static memc_sess_conf *conf_from_cmd(cmd_parms *cmd)
