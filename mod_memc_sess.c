@@ -97,12 +97,11 @@ static int memc_get_session(const char *memcached_host,
                             const char *key, const int vlen, char *val)
 {
   int flags;
-  char *res = NULL;
+  char *res;
   size_t reslen; 
   size_t klen = strlen(key);
   struct memcached_st *memc;
   struct memcached_server_st *servers;
-  unsigned int behave_val = 1;
   memcached_return rc;
 
   memc = memcached_create(NULL);
@@ -114,17 +113,6 @@ static int memc_get_session(const char *memcached_host,
            memcached_strerror(memc, rc));
     return 0;
   }
-
-  /*
-  memcached_behavior_set(memc, MEMCACHED_BEHAVIOR_TCP_NODELAY, &behave_val);
-  memcached_behavior_set(memc, MEMCACHED_BEHAVIOR_NO_BLOCK, &behave_val);
-
-  rc = memcached_set(memc, key, klen, val, vlen, (time_t)0, (uint16_t)0);
-  if(rc != MEMCACHED_SUCCESS) {
-    fprintf(stderr, "Error: %s\n", memcached_strerror(memc, rc));
-    return 0;
-  }
-  */
 
   res = memcached_get(memc, key, klen, &reslen, &flags, &rc);
   if(rc != MEMCACHED_SUCCESS) {
@@ -167,7 +155,6 @@ static const char *get_session_key(request_rec *r, const char *key_name)
   return cookie_value;
 }
 
-/* The sample content handler */
 static int memc_sess_handler(request_rec *r)
 {
   int rc;
@@ -178,10 +165,6 @@ static int memc_sess_handler(request_rec *r)
   const char *session_key;
   char session_key_buf[256];
   char buf[1024];
-
-//  if (strcmp(r->handler, "memc_sess")) {
-//    return DECLINED;
-//  }
 
   if (!memcached_host) {
     ERRLOG(ERR_MSG_NO_MEMCACHED_HOST);
