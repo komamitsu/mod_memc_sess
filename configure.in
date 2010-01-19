@@ -4,12 +4,15 @@
 AC_PREREQ([2.64])
 AC_INIT([mod_memc_sess], [0.1], [komamitsu@gmail.com])
 AC_CONFIG_SRCDIR([mod_memc_sess.c])
-AC_CONFIG_HEADERS([config.h])
+# AC_CONFIG_HEADERS([config.h])
 
 # Checks for programs.
 AC_PROG_CC
-AC_PROG_INSTALL
-AC_CHECK_PROGS(APXS, apxs apxs2, , /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
+# AC_PROG_INSTALL
+AC_CHECK_PROGS(APXS, apxs apxs2, , 
+               /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
+AC_CHECK_PROGS(APACHECTL, apachectl apache2ctl, ,
+               /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin)
 
 # Checks for libraries.
 # AC_CHECK_LIB([memcached], [main])
