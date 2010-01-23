@@ -12,10 +12,9 @@
 #define ERR_MSG_NO_MEMCACHE_KEY_PREFIX (ERR_MSG_HEAD "Memcache key prefix is empty ")
 
 #define ERRLOG(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL, __VA_ARGS__)
+#define DEBUGLOG(...) ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, NULL, __VA_ARGS__)
 
 typedef struct {
-  struct memcached_st *memc;
-  struct memcached_server_st *servers;
   const char *memcached_server;
   const char *session_key_name;
   const char *memcache_key_prefix;
@@ -85,74 +84,51 @@ static const char *get_session_key_from_cookie(request_rec *r,
 /*
  * memcached-client
  */
-static void memc_shutdown(request_rec *r)
-{
-  if (conf_from_req(r)->servers)
-    memcached_server_list_free(conf_from_req(r)->servers);
-
-  if (conf_from_req(r)->memc)
-    memcached_free(conf_from_req(r)->memc);
-
-  conf_from_req(r)->memc = NULL;
-  conf_from_req(r)->servers = NULL;
-}
-
-static int memc_connect(request_rec *r)
-{
-  const char *memcached_server = get_memcached_server(r);
-  struct memcached_st *memc;
-  struct memcached_server_st *servers;
-  memcached_return rc;
-
-  if (!memcached_server) {
-    ERRLOG(ERR_MSG_NO_MEMCACHED_SERVER);
-    return HTTP_INTERNAL_SERVER_ERROR;
-  }
-
-  memc = memcached_create(NULL);
-  servers = memcached_servers_parse((char *)memcached_server);
-  rc = memcached_server_push(memc, servers);
-
-  if(rc != MEMCACHED_SUCCESS) {
-    ERRLOG((ERR_MSG_HEAD "memcached_server_push error. %s "),
-           memcached_strerror(memc, rc));
-    memc_shutdown(r);
-    return 0;
-  }
-
-  conf_from_req(r)->memc = memc;
-  conf_from_req(r)->servers = servers;
-
-  return 1;
-}
-
-static int memc_get_session(request_rec *r,
+static int memc_get_session(request_rec *r, const char *memcached_server,
                             const char *key, const int vlen, char *val)
 {
   int flags;
   char *res;
   size_t reslen; 
   size_t klen = strlen(key);
-  struct memcached_st *memc;
+  struct memcached_st *memc = NULL;
+  struct memcached_server_st *memc_srv = NULL;
   memcached_return rc;
+  int ret = 1;
 
-  if (!conf_from_req(r)->memc && !memc_connect(r))
-    return 0;
+#define RETURN(r) { ret = r; goto clean; }
+  
+  memc = memcached_create(NULL);
+  memc_srv = memcached_servers_parse((char *)memcached_server);
+  rc = memcached_server_push(memc, memc_srv);
 
-  memc = conf_from_req(r)->memc;
+  if(rc != MEMCACHED_SUCCESS) {
+    ERRLOG((ERR_MSG_HEAD "memcached_server_push error. %s "),
+           memcached_strerror(memc, rc));
+    RETURN(-1);
+  }
 
   res = memcached_get(memc, key, klen, &reslen, &flags, &rc);
   if (rc != MEMCACHED_SUCCESS) {
     if (rc != MEMCACHED_NOTFOUND) {
+      RETURN(0);
+    }
+    else {
       ERRLOG((ERR_MSG_HEAD "memcached_get error. %s "),
              memcached_strerror(memc, rc));
-      memc_shutdown(r);
+      RETURN(-1);
     }
-    return 0;
   }
   strncpy(val, res, reslen > vlen ? vlen : reslen);
 
-  return 1;
+clean:
+  if (memc_srv)
+    memcached_server_list_free(memc_srv);
+
+  if (memc)
+    memcached_free(memc);
+
+  return ret;
 }
 
 /*
@@ -161,15 +137,21 @@ static int memc_get_session(request_rec *r,
 static int memc_sess_handler(request_rec *r)
 {
   int rc;
+  const char *memcached_server = get_memcached_server(r);
   const char *session_key_name = get_session_key_name(r);
   const char *memcache_key_prefix = get_memcache_key_prefix(r);
   const char *session_key;
   char session_key_buf[256];
   char buf[1024];
 
+  if (!memcached_server) {
+    DEBUGLOG(ERR_MSG_NO_MEMCACHED_SERVER);
+    return DECLINED;
+  }
+
   if (!session_key_name) {
-    ERRLOG(ERR_MSG_NO_SESSION_KEY_NAME);
-    return HTTP_INTERNAL_SERVER_ERROR;
+    DEBUGLOG(ERR_MSG_NO_SESSION_KEY_NAME);
+    return DECLINED;
   }
 
   if ((session_key = get_session_key_from_cookie(r, session_key_name)) &&
@@ -179,9 +161,17 @@ static int memc_sess_handler(request_rec *r)
     session_key = session_key_buf;
   }
 
-  if (session_key &&
-      (rc = memc_get_session(r, session_key, sizeof(buf), buf))) {
-    ;
+  if (session_key) {
+    switch (
+      memc_get_session(r, memcached_server, session_key, sizeof(buf), buf)
+    ) {
+      case 0:
+        return HTTP_UNAUTHORIZED;
+      case 1:
+        break;
+      default:
+        return HTTP_INTERNAL_SERVER_ERROR;
+    }
   }
   else {
     return HTTP_UNAUTHORIZED;
