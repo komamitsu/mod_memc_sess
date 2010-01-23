@@ -15,9 +15,11 @@
 #define DEBUGLOG(...) ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, NULL, __VA_ARGS__)
 
 typedef struct {
-  const char *memcached_server;
-  const char *session_key_name;
-  const char *memcache_key_prefix;
+  struct memcached_st *memc;
+  struct memcached_server_st *memc_srv;
+  const char *conf_memc_srv;
+  const char *conf_sess_key;
+  const char *conf_memc_key_prefix;
 } memc_sess_conf;
 
 extern module AP_MODULE_DECLARE_DATA memc_sess_module;
@@ -35,19 +37,19 @@ static memc_sess_conf *conf_from_req(request_rec *r)
   return ap_get_module_config(r->server->module_config, &memc_sess_module);
 }
 
-static const char *get_memcached_server(request_rec *r)
+static const char *get_conf_memc_srv(request_rec *r)
 {
-  return conf_from_req(r)->memcached_server;
+  return conf_from_req(r)->conf_memc_srv;
 }
 
-static const char *get_session_key_name(request_rec *r)
+static const char *get_conf_sess_key(request_rec *r)
 {
-  return conf_from_req(r)->session_key_name;
+  return conf_from_req(r)->conf_sess_key;
 }
 
-static const char *get_memcache_key_prefix(request_rec *r)
+static const char *get_conf_memc_key_prefix(request_rec *r)
 {
-  return conf_from_req(r)->memcache_key_prefix;
+  return conf_from_req(r)->conf_memc_key_prefix;
 }
 
 /*
@@ -84,49 +86,58 @@ static const char *get_session_key_from_cookie(request_rec *r,
 /*
  * memcached-client
  */
-static int memc_get_session(request_rec *r, const char *memcached_server,
+static int memc_get_session(request_rec *r, const char *conf_memc_srv,
                             const char *key, const int vlen, char *val)
 {
   int flags;
   char *res;
   size_t reslen; 
   size_t klen = strlen(key);
-  struct memcached_st *memc = NULL;
-  struct memcached_server_st *memc_srv = NULL;
+  memc_sess_conf *c = conf_from_req(r);
   memcached_return rc;
   int ret = 1;
 
-#define RETURN(r) { ret = r; goto clean; }
+#define RETURN(r) { ret = r; goto error; }
   
-  memc = memcached_create(NULL);
-  memc_srv = memcached_servers_parse((char *)memcached_server);
-  rc = memcached_server_push(memc, memc_srv);
-
-  if(rc != MEMCACHED_SUCCESS) {
-    ERRLOG((ERR_MSG_HEAD "memcached_server_push error. %s "),
-           memcached_strerror(memc, rc));
-    RETURN(-1);
+  if (!c->memc || !c->memc_srv) {
+    DEBUGLOG("create new connection");
+    c->memc = memcached_create(NULL);
+    c->memc_srv = memcached_servers_parse((char *)conf_memc_srv);
+    rc = memcached_server_push(c->memc, c->memc_srv);
+    if (rc != MEMCACHED_SUCCESS) {
+      ERRLOG((ERR_MSG_HEAD "memcached_server_push error. %s "),
+             memcached_strerror(c->memc, rc));
+      RETURN(-1);
+    }
   }
 
-  res = memcached_get(memc, key, klen, &reslen, &flags, &rc);
+  res = memcached_get(c->memc, key, klen, &reslen, &flags, &rc);
   if (rc != MEMCACHED_SUCCESS) {
-    if (rc != MEMCACHED_NOTFOUND) {
+    if (rc == MEMCACHED_NOTFOUND) {
+      DEBUGLOG("memcached_get not_found. key [%s]", key);
       RETURN(0);
     }
     else {
       ERRLOG((ERR_MSG_HEAD "memcached_get error. %s "),
-             memcached_strerror(memc, rc));
+             memcached_strerror(c->memc, rc));
       RETURN(-1);
     }
   }
   strncpy(val, res, reslen > vlen ? vlen : reslen);
 
-clean:
-  if (memc_srv)
-    memcached_server_list_free(memc_srv);
+  return 1;
 
-  if (memc)
-    memcached_free(memc);
+error:
+  if (ret < 0) {
+    if (!c->memc_srv)
+      memcached_server_list_free(c->memc_srv);
+
+    if (!c->memc)
+      memcached_free(c->memc);
+
+    c->memc_srv = NULL;
+    c->memc = NULL;
+  }
 
   return ret;
 }
@@ -137,33 +148,33 @@ clean:
 static int memc_sess_handler(request_rec *r)
 {
   int rc;
-  const char *memcached_server = get_memcached_server(r);
-  const char *session_key_name = get_session_key_name(r);
-  const char *memcache_key_prefix = get_memcache_key_prefix(r);
+  const char *conf_memc_srv = get_conf_memc_srv(r);
+  const char *conf_sess_key = get_conf_sess_key(r);
+  const char *conf_memc_key_prefix = get_conf_memc_key_prefix(r);
   const char *session_key;
   char session_key_buf[256];
   char buf[1024];
 
-  if (!memcached_server) {
+  if (!conf_memc_srv) {
     DEBUGLOG(ERR_MSG_NO_MEMCACHED_SERVER);
     return DECLINED;
   }
 
-  if (!session_key_name) {
+  if (!conf_sess_key) {
     DEBUGLOG(ERR_MSG_NO_SESSION_KEY_NAME);
     return DECLINED;
   }
 
-  if ((session_key = get_session_key_from_cookie(r, session_key_name)) &&
-      memcache_key_prefix) {
+  if ((session_key = get_session_key_from_cookie(r, conf_sess_key)) &&
+      conf_memc_key_prefix) {
     snprintf(session_key_buf, sizeof(session_key_buf),
-             "%s%s", memcache_key_prefix, session_key);
+             "%s%s", conf_memc_key_prefix, session_key);
     session_key = session_key_buf;
   }
 
   if (session_key) {
     switch (
-      memc_get_session(r, memcached_server, session_key, sizeof(buf), buf)
+      memc_get_session(r, conf_memc_srv, session_key, sizeof(buf), buf)
     ) {
       case 0:
         return HTTP_UNAUTHORIZED;
@@ -193,33 +204,33 @@ static memc_sess_conf *conf_from_cmd(cmd_parms *cmd)
   return ap_get_module_config(cmd->server->module_config, &memc_sess_module);
 }
 
-static const char *cmd_memcached_server(cmd_parms *cmd, void *config,
+static const char *cmd_conf_memc_srv(cmd_parms *cmd, void *config,
                                       const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-  if (!(conf->memcached_server = arg1)) {
+  if (!(conf->conf_memc_srv = arg1)) {
     return (const char*)apr_pstrcat(
         cmd->pool, ERR_MSG_NO_MEMCACHED_SERVER, arg1, NULL);
   }
   return NULL;
 }
 
-static const char *cmd_session_key_name(cmd_parms *cmd, void *config,
+static const char *cmd_conf_sess_key(cmd_parms *cmd, void *config,
                                    const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-  if (!(conf->session_key_name = arg1)) {
+  if (!(conf->conf_sess_key = arg1)) {
     return (const char*)apr_pstrcat(
         cmd->pool, ERR_MSG_NO_SESSION_KEY_NAME, arg1, NULL);
   }
   return NULL;
 }
 
-static const char *cmd_memcache_key_prefix(cmd_parms *cmd, void *config,
+static const char *cmd_conf_memc_key_prefix(cmd_parms *cmd, void *config,
                                    const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-  if (!(conf->memcache_key_prefix = arg1)) {
+  if (!(conf->conf_memc_key_prefix = arg1)) {
     return (const char*)apr_pstrcat(
         cmd->pool, ERR_MSG_NO_MEMCACHE_KEY_PREFIX, arg1, NULL);
   }
@@ -228,11 +239,11 @@ static const char *cmd_memcache_key_prefix(cmd_parms *cmd, void *config,
 
 static const command_rec memc_sess_cmds[] =
 {
-  AP_INIT_TAKE1("MemcachedServer", cmd_memcached_server, NULL, ACCESS_CONF,
+  AP_INIT_TAKE1("MemcachedServer", cmd_conf_memc_srv, NULL, ACCESS_CONF,
                 "specify host and port of a memcached"),
-  AP_INIT_TAKE1("SessionKeyName", cmd_session_key_name, NULL, ACCESS_CONF,
+  AP_INIT_TAKE1("SessionKeyName", cmd_conf_sess_key, NULL, ACCESS_CONF,
                 "specify a session key name"),
-  AP_INIT_TAKE1("MemcacheKeyPrefix", cmd_memcache_key_prefix, NULL, ACCESS_CONF,
+  AP_INIT_TAKE1("MemcacheKeyPrefix", cmd_conf_memc_key_prefix, NULL, ACCESS_CONF,
                 "specify a memcache key prefix"),
   { NULL }
 };
