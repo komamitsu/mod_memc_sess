@@ -87,7 +87,8 @@ static const char *get_session_key_from_cookie(request_rec *r,
  * memcached-client
  */
 static int memc_get_session(request_rec *r, const char *conf_memc_srv,
-                            const char *key, const int vlen, char *val)
+                            const char *key, const int vlen, char *val,
+                            int retry)
 {
   int flags;
   char *res;
@@ -97,7 +98,7 @@ static int memc_get_session(request_rec *r, const char *conf_memc_srv,
   memcached_return rc;
   int ret = 1;
 
-#define RETURN(r) { ret = r; goto error; }
+#define RETURN(r) { ret = r; goto clean; }
   
   if (!c->memc || !c->memc_srv) {
     DEBUGLOG("create new connection");
@@ -127,7 +128,7 @@ static int memc_get_session(request_rec *r, const char *conf_memc_srv,
 
   return 1;
 
-error:
+clean:
   if (ret < 0) {
     if (!c->memc_srv)
       memcached_server_list_free(c->memc_srv);
@@ -137,6 +138,10 @@ error:
 
     c->memc_srv = NULL;
     c->memc = NULL;
+
+    if (retry > 0) {
+      ret = memc_get_session(r, conf_memc_srv, key, vlen, val, retry - 1);
+    }
   }
 
   return ret;
@@ -154,6 +159,7 @@ static int memc_sess_handler(request_rec *r)
   const char *session_key;
   char session_key_buf[256];
   char buf[1024];
+  int retry = 3;
 
   if (!conf_memc_srv) {
     DEBUGLOG(ERR_MSG_NO_MEMCACHED_SERVER);
@@ -174,7 +180,7 @@ static int memc_sess_handler(request_rec *r)
 
   if (session_key) {
     switch (
-      memc_get_session(r, conf_memc_srv, session_key, sizeof(buf), buf)
+      memc_get_session(r, conf_memc_srv, session_key, sizeof(buf), buf, retry)
     ) {
       case 0:
         return HTTP_UNAUTHORIZED;
