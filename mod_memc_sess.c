@@ -8,7 +8,7 @@
 
 #define ERR_MSG_HEAD "MemcSess: "
 #define ERR_MSG_NO_CONF_SERVER (ERR_MSG_HEAD "Server is empty ")
-#define ERR_MSG_NO_CONF_COOKIE_KEY (ERR_MSG_HEAD "Cookie key is empty ")
+#define ERR_MSG_NO_CONF_COOKIE_NAME (ERR_MSG_HEAD "Cookie name is empty ")
 #define ERR_MSG_NO_CONF_MEMC_KEY_PREFIX (ERR_MSG_HEAD "Memcache key prefix is empty ")
 
 #define ERRLOG(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL, __VA_ARGS__)
@@ -18,7 +18,7 @@ typedef struct {
   struct memcached_st *memc;
   struct memcached_server_st *memc_srv;
   const char *conf_server;
-  const char *conf_cookie_key;
+  const char *conf_cookie_name;
   const char *conf_memc_key_prefix;
 } memc_sess_conf;
 
@@ -42,9 +42,9 @@ static const char *get_conf_server(request_rec *r)
   return conf_from_req(r)->conf_server;
 }
 
-static const char *get_conf_cookie_key(request_rec *r)
+static const char *get_conf_cookie_name(request_rec *r)
 {
-  return conf_from_req(r)->conf_cookie_key;
+  return conf_from_req(r)->conf_cookie_name;
 }
 
 static const char *get_conf_memc_key_prefix(request_rec *r)
@@ -56,7 +56,7 @@ static const char *get_conf_memc_key_prefix(request_rec *r)
  * cookie
  */
 static const char *get_session_key_from_cookie(request_rec *r, 
-                                               const char *key_name)
+                                               const char *cookie_name)
 {
   apr_status_t st;
   apr_table_t *cookie_jar;
@@ -76,7 +76,7 @@ static const char *get_session_key_from_cookie(request_rec *r,
     return NULL;
   }
 
-  cookie_value = apr_table_get(cookie_jar, key_name);
+  cookie_value = apr_table_get(cookie_jar, cookie_name);
   if (!cookie_value)
     return NULL;
 
@@ -154,7 +154,7 @@ static int memc_sess_handler(request_rec *r)
 {
   int rc;
   const char *conf_server = get_conf_server(r);
-  const char *conf_cookie_key = get_conf_cookie_key(r);
+  const char *conf_cookie_name = get_conf_cookie_name(r);
   const char *conf_memc_key_prefix = get_conf_memc_key_prefix(r);
   const char *session_key;
   char session_key_buf[256];
@@ -166,12 +166,12 @@ static int memc_sess_handler(request_rec *r)
     return DECLINED;
   }
 
-  if (!conf_cookie_key) {
-    DEBUGLOG(ERR_MSG_NO_CONF_COOKIE_KEY);
+  if (!conf_cookie_name) {
+    DEBUGLOG(ERR_MSG_NO_CONF_COOKIE_NAME);
     return DECLINED;
   }
 
-  if ((session_key = get_session_key_from_cookie(r, conf_cookie_key)) &&
+  if ((session_key = get_session_key_from_cookie(r, conf_cookie_name)) &&
       conf_memc_key_prefix) {
     snprintf(session_key_buf, sizeof(session_key_buf),
              "%s%s", conf_memc_key_prefix, session_key);
@@ -221,13 +221,13 @@ static const char *cmd_conf_server(cmd_parms *cmd, void *config,
   return NULL;
 }
 
-static const char *cmd_conf_cookie_key(cmd_parms *cmd, void *config,
+static const char *cmd_conf_cookie_name(cmd_parms *cmd, void *config,
                                    const char *arg1)
 {
   memc_sess_conf *conf = conf_from_cmd(cmd);
-  if (!(conf->conf_cookie_key = arg1)) {
+  if (!(conf->conf_cookie_name = arg1)) {
     return (const char*)apr_pstrcat(
-        cmd->pool, ERR_MSG_NO_CONF_COOKIE_KEY, arg1, NULL);
+        cmd->pool, ERR_MSG_NO_CONF_COOKIE_NAME, arg1, NULL);
   }
   return NULL;
 }
@@ -246,12 +246,12 @@ static const char *cmd_conf_memc_key_prefix(cmd_parms *cmd, void *config,
 static const command_rec memc_sess_cmds[] =
 {
   AP_INIT_TAKE1("MemcSessServer", cmd_conf_server, NULL, ACCESS_CONF,
-                "specify host and port of a Memcached"),
-  AP_INIT_TAKE1("MemcSessCookieKey", cmd_conf_cookie_key, NULL, ACCESS_CONF,
-                "specify a cookie key related with the session key"),
+                "specify a host and port of the Memcached"),
+  AP_INIT_TAKE1("MemcSessCookieName", cmd_conf_cookie_name, NULL, ACCESS_CONF,
+                "specify a cookie name related with the session key"),
   AP_INIT_TAKE1("MemcSessMemcKeyPrefix", cmd_conf_memc_key_prefix, 
                 NULL, ACCESS_CONF,
-                "specify a prefix of query key to the Memcached"),
+                "specify a prefix of the key sent to Memcached"),
   { NULL }
 };
 

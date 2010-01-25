@@ -1,6 +1,6 @@
 = Mod_memc_sess
 
-Mod_memc_sess is an Apache module designed to provide a simple access control which checks the login sessions stored in the Memcached.  The module retrieves the session key from the cookie and checks whether the session key is stored in the Memcached.  If the session doesn't exist there, the module forbids the HTTP request. 
+Mod_memc_sess is an Apache module designed to provide a simple access control which only checks the login sessions in Memcached.  The module retrieves the session key from the HTTP cookie and checks whether the session key is stored in Memcached.  If the session doesn't exist, the module forbids the HTTP request. 
 
 
 == Software Dependencies
@@ -12,7 +12,7 @@ The module was built and tested on the following libraries:
 - apache2 (prefork MPM) - 2.2.12
 - libmemcached - 0.31-1
 
-This module doesn't work on multithread, so you can't use it with worker MPM.
+This module doesn't work in multithread, so you can't use it with worker MPM.
 
 
 == Instration
@@ -34,22 +34,24 @@ And add the following directive to your httpd.conf to load the module.
 
 MemcSessServer host:port
 
-- These are the hostname (or IP address) of the Memcached storing the sessions, and the TCP port number listend by the Memcashed.
+- These are the hostname (or IP address) of the Memcached which stores sessions, and the TCP port number listend by the Memcashed.
  
-MemcSessCookieKey cookie_key
+MemcSessCookieName cookie_name
 
-- The name of cookie key that related with the session key. For example, if you recieve the cookie "Cookie: foo_session_id=1234abcd5678" and it stores a session key "1234abcd5678", you should set "MemcSessCookieKey foo_session_id".
+- The name of the session cookie. If you recieve the cookie "Cookie: foo_session_id=1234abcd5678", you should set "MemcSessCookieName foo_session_id".
 
 MemcSessMemcKeyPrefix key_prefix
 
-- This is optional. This key_prefix is used as a prefix of Memcached query key. For example, if you set "MemcSessMemcKeyPrefix bar_session:" and the session key is "1234abcd5678", the query for Memcached is "bar_session:1234abcd5678".
+- This is optional. This key_prefix is used as a prefix of the keys which used to query Memcached. For example, if you set "MemcSessMemcKeyPrefix bar_session:" and the session key embedded in a cookie is "1234abcd5678", the key sent to Memcached is "bar_session:1234abcd5678".
 
 
 == License
+
 Mod_memc_sess is released under the MIT license.
 
 
 == Author
+
 Mitsunori Komatsu <komamitsu [at] gmail [dot] com>
 
 
