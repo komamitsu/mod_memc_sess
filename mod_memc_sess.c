@@ -67,7 +67,7 @@ static const char *get_session_key_from_cookie(request_rec *r,
   if (!cookie_string)
     return NULL;
 
-  cookie_jar = apr_table_make(r->pool, 1);
+  cookie_jar = apr_table_make(r->pool, 6);
   st = apreq_parse_cookie_header(r->pool, cookie_jar, cookie_string);
   if (st != APR_SUCCESS) {
     char buf[512];
