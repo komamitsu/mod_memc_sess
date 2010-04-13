@@ -5,7 +5,7 @@
 
 APXS=@APXS@
 APACHECTL=@APACHECTL@
-LIBS=-lmemcached
+LIBS=-lmemcached -lapreq2
 
 all: mod_memc_sess.c
 	$(APXS) $(LIBS) -c mod_memc_sess.c

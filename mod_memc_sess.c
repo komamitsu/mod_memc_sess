@@ -1,9 +1,12 @@
 #include "httpd.h"
 #include "http_config.h"
 #include "http_protocol.h"
+#include "http_request.h"
 #include "http_log.h"
 #include "ap_config.h"
+#include "apr-1/apr_strings.h"
 #include "apreq2/apreq_cookie.h"
+#include "apreq2/apreq_error.h"
 #include "libmemcached/memcached.h"
 
 #define ERR_MSG_HEAD "MemcSess: "
