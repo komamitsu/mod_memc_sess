@@ -13,6 +13,7 @@
 #define ERR_MSG_NO_CONF_SERVER (ERR_MSG_HEAD "Server is empty ")
 #define ERR_MSG_NO_CONF_COOKIE_NAME (ERR_MSG_HEAD "Cookie name is empty ")
 #define ERR_MSG_NO_CONF_MEMC_KEY_PREFIX (ERR_MSG_HEAD "Memcache key prefix is empty ")
+#define ERR_MSG_NO_CONF_MEMC_SKIP_IP (ERR_MSG_HEAD "Skip ip address is empty ")
 
 #define ERRLOG(...) ap_log_error(APLOG_MARK, APLOG_ERR, 0, NULL, __VA_ARGS__)
 #define DEBUGLOG(...) ap_log_error(APLOG_MARK, APLOG_DEBUG, 0, NULL, __VA_ARGS__)
@@ -23,6 +24,7 @@ typedef struct {
   const char *conf_server;
   const char *conf_cookie_name;
   const char *conf_memc_key_prefix;
+  const char *conf_memc_skip_ip;
 } memc_sess_conf;
 
 extern module AP_MODULE_DECLARE_DATA memc_sess_module;
@@ -53,6 +55,11 @@ static const char *get_conf_cookie_name(request_rec *r)
 static const char *get_conf_memc_key_prefix(request_rec *r)
 {
   return conf_from_req(r)->conf_memc_key_prefix;
+}
+
+static const char *get_conf_memc_skip_ip(request_rec *r)
+{
+  return conf_from_req(r)->conf_memc_skip_ip;
 }
 
 /*
@@ -159,6 +166,7 @@ static int memc_sess_handler(request_rec *r)
   const char *conf_server = get_conf_server(r);
   const char *conf_cookie_name = get_conf_cookie_name(r);
   const char *conf_memc_key_prefix = get_conf_memc_key_prefix(r);
+  const char *conf_memc_skip_ip = get_conf_memc_skip_ip(r);
   const char *session_key;
   char session_key_buf[256];
   char buf[1024];
@@ -179,6 +187,13 @@ static int memc_sess_handler(request_rec *r)
     snprintf(session_key_buf, sizeof(session_key_buf),
              "%s%s", conf_memc_key_prefix, session_key);
     session_key = session_key_buf;
+  }
+
+  if (conf_memc_skip_ip) {
+    char *skip_ip = r->connection->remote_ip;
+    if (skip_ip && 
+        strncmp(conf_memc_skip_ip, skip_ip, strlen(conf_memc_skip_ip)) == 0)
+      return DECLINED;
   }
 
   if (session_key) {
@@ -246,6 +261,17 @@ static const char *cmd_conf_memc_key_prefix(cmd_parms *cmd, void *config,
   return NULL;
 }
 
+static const char *cmd_conf_memc_skip_ip(cmd_parms *cmd, void *config,
+                                   const char *arg1)
+{
+  memc_sess_conf *conf = conf_from_cmd(cmd);
+  if (!(conf->conf_memc_skip_ip = arg1)) {
+    return (const char*)apr_pstrcat(
+        cmd->pool, ERR_MSG_NO_CONF_MEMC_SKIP_IP, arg1, NULL);
+  }
+  return NULL;
+}
+
 static const command_rec memc_sess_cmds[] =
 {
   AP_INIT_TAKE1("MemcSessServer", cmd_conf_server, NULL, ACCESS_CONF,
@@ -255,6 +281,8 @@ static const command_rec memc_sess_cmds[] =
   AP_INIT_TAKE1("MemcSessMemcKeyPrefix", cmd_conf_memc_key_prefix, 
                 NULL, ACCESS_CONF,
                 "specify a prefix of the key sent to Memcached"),
+  AP_INIT_TAKE1("MemcSessSkipIp", cmd_conf_memc_skip_ip, NULL, ACCESS_CONF,
+                "specify a src ip address which will skip mod_memc_sess check"),
   { NULL }
 };
 
